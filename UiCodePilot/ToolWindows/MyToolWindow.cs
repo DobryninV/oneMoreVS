@@ -14,7 +14,7 @@ namespace UiCodePilot
 
         public override Task<FrameworkElement> CreateAsync(int toolWindowId, CancellationToken cancellationToken)
         {
-            return Task.FromResult<FrameworkElement>(new MyGuiControl());
+            return Task.FromResult<FrameworkElement>(new MyGui.MyGuiControl());
         }
 
         [Guid("71b04019-ddc9-43a6-8d76-9ad5a74bbf48")]

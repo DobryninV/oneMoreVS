@@ -3,10 +3,11 @@ using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Newtonsoft.Json;
 using System;
+using System.Diagnostics;
 using System.Windows.Controls;
 using UiCodePilot.UI;
 
-namespace UiCodePilot.ToolWindows
+namespace MyGui
 {
     /// <summary>
     /// GUI контрол с WebView2 для отображения веб-интерфейса
@@ -17,17 +18,13 @@ namespace UiCodePilot.ToolWindows
         private WebView _webViewHandler;
         private bool _isInitialized;
 
-        /// <summary>
-        /// Конструктор
-        /// </summary>
         public MyGuiControl()
         {
+            Debug.WriteLine("Debug Start");
             InitializeWebView();
         }
 
-        /// <summary>
-        /// Асинхронная инициализация WebView2
-        /// </summary>
+
         private async void InitializeWebView()
         {
             try
@@ -51,9 +48,11 @@ namespace UiCodePilot.ToolWindows
                 // Инициализируем WebView2
                 await _webView.EnsureCoreWebView2Async(environment);
 
+                Debug.WriteLine("WebMessageReceived");
                 // Регистрируем обработчик сообщений от WebView
                 _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
 
+                Debug.WriteLine("AddScriptToExecuteOnDocumentCreatedAsync");
                 // Регистрируем JavaScript-функцию для отправки сообщений в VS2022
                 await _webView.CoreWebView2.AddScriptToExecuteOnDocumentCreatedAsync(@"
                     window.postVS2022Message = (messageType, data, messageId) => {
@@ -68,18 +67,22 @@ namespace UiCodePilot.ToolWindows
                     localStorage.setItem('ide', 'vs2022');
                 ");
 
+                Debug.WriteLine("_isInitialized");
+
                 // Устанавливаем флаг инициализации
                 _isInitialized = true;
 
                 // Загружаем GUI с localhost
                 _webView.Source = new Uri("http://localhost:5173/");
 
+                Debug.WriteLine("and _webViewHandler");
                 // Создаем обработчик WebView
-                _webViewHandler = new WebView(_webView, null);
+                //_webViewHandler = new WebView(_webView, null);
+                Debug.WriteLine("and constructor");
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"Error initializing WebView2: {ex.Message}");
+                Debug.WriteLine($"Error initializing WebView2: {ex.Message}");
                 await VS.MessageBox.ShowWarningAsync("UiCodePilot", $"Ошибка инициализации WebView2: {ex.Message}");
             }
         }
@@ -123,7 +126,7 @@ namespace UiCodePilot.ToolWindows
                     break;
                 default:
                     // Для других типов сообщений можно добавить соответствующую обработку
-                    System.Diagnostics.Debug.WriteLine($"Received message of type: {message.MessageType}");
+                    Debug.WriteLine($"Received message of type: {message.MessageType}");
                     break;
             }
         }
