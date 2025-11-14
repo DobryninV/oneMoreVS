@@ -548,11 +548,21 @@ namespace MyGui
                 _startProps = new System.Diagnostics.ProcessStartInfo();
                 _startProps.FileName = "D:\\Prog\\CodePilotVS\\binary\\bin\\win32-x64\\continue-binary.exe";
                 Debug.WriteLine($"!!!!!!!!!!!! _coreProcess StartInfo");
+                
+                // Устанавливаем рабочую директорию для процесса Core
+                _startProps.WorkingDirectory = "D:\\Prog\\CodePilotVS";
+                Debug.WriteLine($"Working directory: {_startProps.WorkingDirectory}");
+                
+                // Настраиваем процесс
                 _startProps.UseShellExecute = false;
                 _startProps.RedirectStandardInput = true;
                 _startProps.RedirectStandardOutput = true;
                 _startProps.RedirectStandardError = true; // Перенаправляем поток ошибок
                 _startProps.CreateNoWindow = true;
+                
+                // Добавляем переменные окружения, которые могут быть необходимы для работы Core
+                _startProps.EnvironmentVariables["NODE_ENV"] = "production";
+                _startProps.EnvironmentVariables["CONTINUE_BINARY_PATH"] = "D:\\Prog\\CodePilotVS\\binary\\bin\\win32-x64\\continue-binary.exe";
 
                 Debug.WriteLine($"!!!!!!!!!!!! _coreProcess OnCoreOutputDataReceived");
                 // Обработчик вывода
