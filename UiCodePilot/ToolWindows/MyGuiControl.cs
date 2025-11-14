@@ -5,6 +5,8 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Controls;
 using UiCodePilot.UI;
 using EnvDTE;
@@ -19,11 +21,30 @@ namespace MyGui
         private WebView2 _webView;
         private WebView _webViewHandler;
         private bool _isInitialized;
+        private CoreMessenger _coreMessenger;
 
         public MyGuiControl()
         {
             Debug.WriteLine("Debug Start");
             InitializeWebView();
+            InitializeCore();
+        }
+
+        /// <summary>
+        /// Инициализация Core
+        /// </summary>
+        private void InitializeCore()
+        {
+            try
+            {
+                // Создаем экземпляр CoreMessenger для обмена сообщениями с Core
+                _coreMessenger = new CoreMessenger();
+                Debug.WriteLine("Core initialized");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error initializing Core: {ex.Message}");
+            }
         }
 
 
@@ -135,6 +156,12 @@ namespace MyGui
                 case "config/listProfiles":
                     HandleListProfiles(message);
                     break;
+                case "config/openProfile":
+                    HandleOpenProfile(message);
+                    break;
+                case "config/getSerializedProfileInfo":
+                    HandleGetSerializedProfileInfo(message);
+                    break;
                 case "getOpenFiles":
                     HandleGetOpenFiles(message);
                     break;
@@ -149,21 +176,32 @@ namespace MyGui
         /// Обработка запроса информации о сессии Control Plane
         /// </summary>
         /// <param name="message">Сообщение</param>
-        private void HandleGetControlPlaneSessionInfo(Message message)
+        private async void HandleGetControlPlaneSessionInfo(Message message)
         {
             try
             {
-                // Создаем объект с информацией о сессии Control Plane
-                var sessionInfo = new
+                if (_coreMessenger != null)
                 {
-                    isLoggedIn = false,
-                    username = "",
-                    email = "",
-                    organizations = new object[] { }
-                };
+                    // Получаем информацию о сессии Control Plane из Core
+                    var result = await _coreMessenger.RequestFromCore("getControlPlaneSessionInfo", message.Data);
+                    
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+                else
+                {
+                    // Если Core не инициализирован, возвращаем заглушку
+                    var sessionInfo = new
+                    {
+                        isLoggedIn = false,
+                        username = "",
+                        email = "",
+                        organizations = new object[] { }
+                    };
 
-                // Отправляем ответ
-                SendToWebview(message.MessageType, sessionInfo, message.MessageId);
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, sessionInfo, message.MessageId);
+                }
             }
             catch (Exception ex)
             {
@@ -176,23 +214,34 @@ namespace MyGui
         /// Обработка запроса настроек IDE
         /// </summary>
         /// <param name="message">Сообщение</param>
-        private void HandleGetIdeSettings(Message message)
+        private async void HandleGetIdeSettings(Message message)
         {
             try
             {
-                // Создаем объект с настройками IDE
-                var ideSettings = new
+                if (_coreMessenger != null)
                 {
-                    remoteConfigServerUrl = "",
-                    remoteConfigSyncPeriod = 0,
-                    userToken = "",
-                    enableControlServerBeta = false,
-                    pauseCodebaseIndexOnStart = false,
-                    continueTestEnvironment = "none"
-                };
+                    // Получаем настройки IDE из Core
+                    var result = await _coreMessenger.RequestFromCore("getIdeSettings", message.Data);
+                    
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+                else
+                {
+                    // Если Core не инициализирован, возвращаем заглушку
+                    var ideSettings = new
+                    {
+                        remoteConfigServerUrl = "",
+                        remoteConfigSyncPeriod = 0,
+                        userToken = "",
+                        enableControlServerBeta = false,
+                        pauseCodebaseIndexOnStart = false,
+                        continueTestEnvironment = "none"
+                    };
 
-                // Отправляем ответ
-                SendToWebview(message.MessageType, ideSettings, message.MessageId);
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, ideSettings, message.MessageId);
+                }
             }
             catch (Exception ex)
             {
@@ -205,15 +254,26 @@ namespace MyGui
         /// Обработка запроса списка профилей
         /// </summary>
         /// <param name="message">Сообщение</param>
-        private void HandleListProfiles(Message message)
+        private async void HandleListProfiles(Message message)
         {
             try
             {
-                // Создаем объект со списком профилей
-                var profiles = new object[] { };
+                if (_coreMessenger != null)
+                {
+                    // Получаем список профилей из Core
+                    var result = await _coreMessenger.RequestFromCore("config/listProfiles", message.Data);
+                    
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+                else
+                {
+                    // Если Core не инициализирован, возвращаем заглушку
+                    var profiles = new object[] { };
 
-                // Отправляем ответ
-                SendToWebview(message.MessageType, profiles, message.MessageId);
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, profiles, message.MessageId);
+                }
             }
             catch (Exception ex)
             {
@@ -223,14 +283,116 @@ namespace MyGui
         }
 
         /// <summary>
-        /// Обработка запроса списка открытых файлов
+        /// Обработка запроса открытия профиля
         /// </summary>
         /// <param name="message">Сообщение</param>
-        private void HandleGetOpenFiles(Message message)
+        private async void HandleOpenProfile(Message message)
         {
             try
             {
-                // Получаем список открытых файлов
+                if (_coreMessenger != null)
+                {
+                    // Получаем результат открытия профиля из Core
+                    var result = await _coreMessenger.RequestFromCore("config/openProfile", message.Data);
+                    
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+                else
+                {
+                    // Если Core не инициализирован, возвращаем заглушку
+                    var result = new
+                    {
+                        success = true
+                    };
+
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error handling config/openProfile: {ex.Message}");
+                SendToWebview(message.MessageType, new { error = ex.Message }, message.MessageId);
+            }
+        }
+
+        /// <summary>
+        /// Обработка запроса сериализованной информации о профиле
+        /// </summary>
+        /// <param name="message">Сообщение</param>
+        private async void HandleGetSerializedProfileInfo(Message message)
+        {
+            try
+            {
+                if (_coreMessenger != null)
+                {
+                    // Получаем информацию о профиле из Core
+                    var result = await _coreMessenger.RequestFromCore("config/getSerializedProfileInfo", message.Data);
+                    
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, result, message.MessageId);
+                }
+                else
+                {
+                    // Если Core не инициализирован, возвращаем заглушку
+                    dynamic requestData = message.Data;
+                    string profileId = requestData?.profileId?.ToString();
+
+                    // Создаем объект с информацией о профиле
+                    var profileInfo = new
+                    {
+                        id = profileId ?? "default",
+                        name = "Default Profile",
+                        description = "Default profile for VS2022",
+                        profileType = "local",
+                        config = new
+                        {
+                            models = new object[] { },
+                            ui = new
+                            {
+                                showSessionTabs = true
+                            }
+                        }
+                    };
+
+                    // Отправляем ответ
+                    SendToWebview(message.MessageType, profileInfo, message.MessageId);
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Error handling config/getSerializedProfileInfo: {ex.Message}");
+                SendToWebview(message.MessageType, new { error = ex.Message }, message.MessageId);
+            }
+        }
+
+        /// <summary>
+        /// Обработка запроса списка открытых файлов
+        /// </summary>
+        /// <param name="message">Сообщение</param>
+        private async void HandleGetOpenFiles(Message message)
+        {
+            try
+            {
+                if (_coreMessenger != null)
+                {
+                    // Сначала пробуем получить список открытых файлов из Core
+                    try
+                    {
+                        var result = await _coreMessenger.RequestFromCore("getOpenFiles", message.Data);
+                        
+                        // Отправляем ответ
+                        SendToWebview(message.MessageType, result, message.MessageId);
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.WriteLine($"Error getting open files from Core: {ex.Message}. Falling back to local implementation.");
+                    }
+                }
+                
+                // Если Core не инициализирован или произошла ошибка, используем локальную реализацию
                 var openFiles = GetOpenFiles();
 
                 // Отправляем ответ
@@ -338,5 +500,152 @@ namespace MyGui
         /// </summary>
         [JsonProperty("data")]
         public object Data { get; set; }
+    }
+
+    /// <summary>
+    /// Класс для обмена сообщениями с Core
+    /// </summary>
+    public class CoreMessenger
+    {
+        private Process _coreProcess;
+        private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
+
+        /// <summary>
+        /// Конструктор
+        /// </summary>
+        public CoreMessenger()
+        {
+            StartCoreProcess();
+        }
+
+        /// <summary>
+        /// Запуск процесса Core
+        /// </summary>
+        private void StartCoreProcess()
+        {
+            try
+            {
+                // Путь к исполняемому файлу Core
+                string corePath = System.IO.Path.Combine(
+                    System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
+                    "core",
+                    "core.exe");
+
+                // Создаем процесс
+                _coreProcess = new Process();
+                _coreProcess.StartInfo.FileName = corePath;
+                _coreProcess.StartInfo.UseShellExecute = false;
+                _coreProcess.StartInfo.RedirectStandardInput = true;
+                _coreProcess.StartInfo.RedirectStandardOutput = true;
+                _coreProcess.StartInfo.CreateNoWindow = true;
+
+                // Обработчик вывода
+                _coreProcess.OutputDataReceived += OnCoreOutputDataReceived;
+
+                // Запускаем процесс
+                _coreProcess.Start();
+                _coreProcess.BeginOutputReadLine();
+
+                Debug.WriteLine("Core process started");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error starting Core process: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Обработчик вывода Core
+        /// </summary>
+        /// <param name="sender">Отправитель</param>
+        /// <param name="e">Аргументы события</param>
+        private void OnCoreOutputDataReceived(object sender, DataReceivedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Data))
+                return;
+
+            try
+            {
+                // Парсим JSON
+                var message = JsonConvert.DeserializeObject<Message>(e.Data);
+                if (message == null)
+                    return;
+
+                // Если есть ожидающий запрос, завершаем его
+                if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
+                {
+                    tcs.SetResult(message.Data);
+                    _pendingRequests.Remove(message.MessageId);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error handling Core output: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Отправка сообщения в Core
+        /// </summary>
+        /// <param name="messageType">Тип сообщения</param>
+        /// <param name="data">Данные сообщения</param>
+        /// <param name="messageId">Идентификатор сообщения</param>
+        public void SendToCore(string messageType, object data, string messageId = null)
+        {
+            if (_coreProcess == null || _coreProcess.HasExited)
+            {
+                Debug.WriteLine("Core process is not running");
+                return;
+            }
+
+            try
+            {
+                // Создаем сообщение
+                var message = new Message
+                {
+                    MessageId = messageId ?? Guid.NewGuid().ToString(),
+                    MessageType = messageType,
+                    Data = data
+                };
+
+                // Сериализуем сообщение в JSON
+                var json = JsonConvert.SerializeObject(message);
+
+                // Отправляем сообщение в Core
+                _coreProcess.StandardInput.WriteLine(json);
+                _coreProcess.StandardInput.Flush();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error sending message to Core: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Отправка запроса в Core и ожидание ответа
+        /// </summary>
+        /// <param name="messageType">Тип сообщения</param>
+        /// <param name="data">Данные сообщения</param>
+        /// <returns>Ответ от Core</returns>
+        public async Task<object> RequestFromCore(string messageType, object data)
+        {
+            var messageId = Guid.NewGuid().ToString();
+            var tcs = new TaskCompletionSource<object>();
+            _pendingRequests[messageId] = tcs;
+
+            SendToCore(messageType, data, messageId);
+
+            // Ожидаем ответ с таймаутом
+            var timeoutTask = Task.Delay(10000);
+            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                _pendingRequests.Remove(messageId);
+                throw new TimeoutException($"Request to Core timed out: {messageType}");
+            }
+
+            return await tcs.Task;
+        }
     }
 }
