@@ -6,7 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Pipes;
+using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Controls;
@@ -289,9 +289,9 @@ namespace MyGui
     /// </summary>
     public class CoreMessenger
     {
-        private NamedPipeClientStream _pipeClient;
-        private StreamWriter _pipeWriter;
-        private StreamReader _pipeReader;
+        private TcpClient _tcpClient;
+        private StreamWriter _tcpWriter;
+        private StreamReader _tcpReader;
         private Thread _readThread;
         private bool _isConnected;
         private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
@@ -305,33 +305,39 @@ namespace MyGui
         }
 
         /// <summary>
-        /// Подключение к Core через именованный канал
+        /// Подключение к Core через TCP
         /// </summary>
         private void ConnectToCore()
         {
             try
             {
-                // Имя канала для подключения к Core
-                string pipeName = "ContinueCore";
+                // Адрес и порт для подключения к Core
+                string host = "127.0.0.1";
+                int port = 3000;
 
-                // Создаем клиент именованного канала
-                _pipeClient = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                // Создаем TCP-клиент
+                _tcpClient = new TcpClient();
                 
                 // Пытаемся подключиться с таймаутом
-                _pipeClient.Connect(5000);
+                var connectTask = _tcpClient.ConnectAsync(host, port);
+                if (!Task.WaitAll(new Task[] { connectTask }, 5000))
+                {
+                    throw new TimeoutException($"Connection to {host}:{port} timed out");
+                }
                 
                 // Создаем потоки для чтения и записи
-                _pipeWriter = new StreamWriter(_pipeClient) { AutoFlush = true };
-                _pipeReader = new StreamReader(_pipeClient);
+                NetworkStream stream = _tcpClient.GetStream();
+                _tcpWriter = new StreamWriter(stream) { AutoFlush = true };
+                _tcpReader = new StreamReader(stream);
                 
                 // Запускаем поток для чтения ответов
-                _readThread = new Thread(ReadPipeMessages);
+                _readThread = new Thread(ReadTcpMessages);
                 _readThread.IsBackground = true;
                 _readThread.Start();
                 
                 _isConnected = true;
                 
-                Debug.WriteLine("Connected to Core via named pipe");
+                Debug.WriteLine($"Connected to Core via TCP at {host}:{port}");
             }
             catch (Exception ex)
             {
@@ -341,15 +347,15 @@ namespace MyGui
         }
 
         /// <summary>
-        /// Чтение сообщений из канала
+        /// Чтение сообщений из TCP-соединения
         /// </summary>
-        private void ReadPipeMessages()
+        private void ReadTcpMessages()
         {
             try
             {
-                while (_isConnected && _pipeClient.IsConnected)
+                while (_isConnected && _tcpClient.Connected)
                 {
-                    string line = _pipeReader.ReadLine();
+                    string line = _tcpReader.ReadLine();
                     if (string.IsNullOrEmpty(line))
                         continue;
 
@@ -359,7 +365,7 @@ namespace MyGui
             }
             catch (Exception ex)
             {
-                Debug.WriteLine($"Error reading from pipe: {ex.Message}");
+                Debug.WriteLine($"Error reading from TCP: {ex.Message}");
                 _isConnected = false;
             }
         }
@@ -398,7 +404,7 @@ namespace MyGui
         /// <param name="messageId">Идентификатор сообщения</param>
         public void SendToCore(string messageType, object data, string messageId = null)
         {
-            if (!_isConnected || !_pipeClient.IsConnected)
+            if (!_isConnected || !_tcpClient.Connected)
             {
                 Debug.WriteLine("Not connected to Core");
                 return;
@@ -418,7 +424,7 @@ namespace MyGui
                 var json = JsonConvert.SerializeObject(message);
 
                 // Отправляем сообщение в Core
-                _pipeWriter.WriteLine(json);
+                _tcpWriter.WriteLine(json);
             }
             catch (Exception ex)
             {
