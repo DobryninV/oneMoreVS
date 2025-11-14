@@ -1,4 +1,6 @@
 ﻿
+using EnvDTE;
+using EnvDTE80;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
 using Newtonsoft.Json;
@@ -9,7 +11,6 @@ using System.IO;
 using System.Threading.Tasks;
 using System.Windows.Controls;
 using UiCodePilot.UI;
-using EnvDTE;
 
 namespace MyGui
 {
@@ -74,6 +75,7 @@ namespace MyGui
                 Debug.WriteLine("WebMessageReceived");
                 // Регистрируем обработчик сообщений от WebView
                 _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
+                _webView.CoreWebView2.Settings.IsWebMessageEnabled = true;
 
                 Debug.WriteLine("AddScriptToExecuteOnDocumentCreatedAsync");
                 // Регистрируем JavaScript-функцию для отправки сообщений в VS2022
@@ -87,7 +89,7 @@ namespace MyGui
                     };
 
                     // Устанавливаем флаг IDE
-                    localStorage.setItem('ide', 'vs2022');
+                    //localStorage.setItem('ide', 'vs2022');
                 ");
 
                 Debug.WriteLine("_isInitialized");
@@ -117,6 +119,7 @@ namespace MyGui
         /// <param name="e">Аргументы события</param>
         private void OnWebMessageReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
+            Debug.WriteLine($"$ {sender.ToString()}");
             try
             {
                 // Получаем сообщение
@@ -141,6 +144,7 @@ namespace MyGui
         /// <param name="message">Сообщение</param>
         private void HandleMessage(Message message)
         {
+            Debug.WriteLine($"!!!! Message {message.MessageType} {message.Data}");
             // Здесь можно добавить обработку различных типов сообщений
             switch (message.MessageType)
             {
@@ -468,8 +472,14 @@ namespace MyGui
                 // Сериализуем сообщение в JSON
                 var json = JsonConvert.SerializeObject(message);
 
+                Debug.WriteLine($"PostWebMessageAsJson: {json}");
+
+                //_webView.CoreWebView2.PostWebMessag
+
                 // Отправляем сообщение в WebView
                 _webView.CoreWebView2.PostWebMessageAsJson(json);
+                // window.postMessage("message", {"messageId":"2cc027ff-401b-4e2c-aa0c-4f02f1bd4bf3","messageType":"getOpenFiles","data":["file:///C:/Users/harit/source/repos/CodePilot/CodePilot/CodePilotPackage.cs"]})
+
             }
             catch (Exception ex)
             {
@@ -507,7 +517,8 @@ namespace MyGui
     /// </summary>
     public class CoreMessenger
     {
-        private Process _coreProcess;
+        private System.Diagnostics.ProcessStartInfo _startProps;
+        private System.Diagnostics.Process _coreProcess;
         private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
 
         /// <summary>
@@ -525,33 +536,46 @@ namespace MyGui
         {
             try
             {
+
+                Debug.WriteLine($"!!!!!!!!!!!! SGewnmdsf {System.Reflection.Assembly.GetExecutingAssembly().Location}");
                 // Путь к исполняемому файлу Core
                 string corePath = System.IO.Path.Combine(
-                    System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
-                    "core",
-                    "core.exe");
+                    "D:/Prog/CodePilotVS/binary/bin/win32 - x64/continue-binary.exe",
+                    "win32 - x64",
+                    "continue-binary.exe");
 
                 // Создаем процесс
-                _coreProcess = new Process();
-                _coreProcess.StartInfo.FileName = corePath;
-                _coreProcess.StartInfo.UseShellExecute = false;
-                _coreProcess.StartInfo.RedirectStandardInput = true;
-                _coreProcess.StartInfo.RedirectStandardOutput = true;
-                _coreProcess.StartInfo.CreateNoWindow = true;
+                _startProps = new System.Diagnostics.ProcessStartInfo();
+                _startProps.FileName = "D:\\Prog\\CodePilotVS\\binary\\bin\\win32-x64\\continue-binary.exe";
+                Debug.WriteLine($"!!!!!!!!!!!! _coreProcess StartInfo");
+                _startProps.UseShellExecute = false;
+                _startProps.RedirectStandardInput = true;
+                _startProps.RedirectStandardOutput = true;
+                _startProps.CreateNoWindow = true;
 
+                Debug.WriteLine($"!!!!!!!!!!!! _coreProcess OnCoreOutputDataReceived");
                 // Обработчик вывода
-                _coreProcess.OutputDataReceived += OnCoreOutputDataReceived;
+                
 
+                Debug.WriteLine($"!!!!!!!!!!!! _coreProcess Start");
                 // Запускаем процесс
-                _coreProcess.Start();
+                _coreProcess = System.Diagnostics.Process.Start(_startProps);
+                _coreProcess.OutputDataReceived += OnCoreOutputDataReceived;
+                Debug.WriteLine($"!!!!!!!!!!!! _coreProcess BeginOutputReadLine");
                 _coreProcess.BeginOutputReadLine();
 
                 Debug.WriteLine("Core process started");
+                _coreProcess.Exited += OnExited;
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error starting Core process: {ex.Message}");
             }
+        }
+
+        private void OnExited(object lol, EventArgs e)
+        {
+            Debug.WriteLine($"!!!!!! Exited !!!! {lol} !!!! {e}");
         }
 
         /// <summary>
@@ -594,7 +618,7 @@ namespace MyGui
         {
             if (_coreProcess == null || _coreProcess.HasExited)
             {
-                Debug.WriteLine("Core process is not running");
+                Debug.WriteLine($"!\n не работает процесс _coreProcess");
                 return;
             }
 
