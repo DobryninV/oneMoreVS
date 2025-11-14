@@ -551,6 +551,7 @@ namespace MyGui
                 _startProps.UseShellExecute = false;
                 _startProps.RedirectStandardInput = true;
                 _startProps.RedirectStandardOutput = true;
+                _startProps.RedirectStandardError = true; // Перенаправляем поток ошибок
                 _startProps.CreateNoWindow = true;
 
                 Debug.WriteLine($"!!!!!!!!!!!! _coreProcess OnCoreOutputDataReceived");
@@ -561,8 +562,10 @@ namespace MyGui
                 // Запускаем процесс
                 _coreProcess = System.Diagnostics.Process.Start(_startProps);
                 _coreProcess.OutputDataReceived += OnCoreOutputDataReceived;
+                _coreProcess.ErrorDataReceived += OnCoreErrorDataReceived; // Добавляем обработчик ошибок
                 Debug.WriteLine($"!!!!!!!!!!!! _coreProcess BeginOutputReadLine");
                 _coreProcess.BeginOutputReadLine();
+                _coreProcess.BeginErrorReadLine(); // Начинаем асинхронное чтение потока ошибок
 
                 Debug.WriteLine("Core process started");
                 _coreProcess.Exited += OnExited;
@@ -579,6 +582,19 @@ namespace MyGui
         }
 
         /// <summary>
+        /// Обработчик ошибок Core
+        /// </summary>
+        /// <param name="sender">Отправитель</param>
+        /// <param name="e">Аргументы события</param>
+        private void OnCoreErrorDataReceived(object sender, DataReceivedEventArgs e)
+        {
+            if (string.IsNullOrEmpty(e.Data))
+                return;
+
+            Debug.WriteLine($"Core ERROR: {e.Data}");
+        }
+
+        /// <summary>
         /// Обработчик вывода Core
         /// </summary>
         /// <param name="sender">Отправитель</param>
@@ -588,23 +604,37 @@ namespace MyGui
             if (string.IsNullOrEmpty(e.Data))
                 return;
 
+            // Выводим все сообщения для отладки
+            Debug.WriteLine($"Core OUTPUT: {e.Data}");
+
             try
             {
                 // Парсим JSON
                 var message = JsonConvert.DeserializeObject<Message>(e.Data);
                 if (message == null)
+                {
+                    Debug.WriteLine("Failed to parse message as JSON");
                     return;
+                }
+
+                Debug.WriteLine($"Received message from Core: {message.MessageType} (ID: {message.MessageId})");
 
                 // Если есть ожидающий запрос, завершаем его
                 if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
                 {
+                    Debug.WriteLine($"Completing request: {message.MessageId}");
                     tcs.SetResult(message.Data);
                     _pendingRequests.Remove(message.MessageId);
+                }
+                else
+                {
+                    Debug.WriteLine($"No pending request found for message ID: {message.MessageId}");
                 }
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error handling Core output: {ex.Message}");
+                Debug.WriteLine($"Raw output: {e.Data}");
             }
         }
 
@@ -616,10 +646,26 @@ namespace MyGui
         /// <param name="messageId">Идентификатор сообщения</param>
         public void SendToCore(string messageType, object data, string messageId = null)
         {
-            if (_coreProcess == null || _coreProcess.HasExited)
+            if (_coreProcess == null)
             {
-                Debug.WriteLine($"!\n не работает процесс _coreProcess");
-                return;
+                Debug.WriteLine("Core process is null, trying to restart...");
+                StartCoreProcess();
+                if (_coreProcess == null)
+                {
+                    Debug.WriteLine("Failed to restart Core process");
+                    return;
+                }
+            }
+            
+            if (_coreProcess.HasExited)
+            {
+                Debug.WriteLine($"Core process has exited with code {_coreProcess.ExitCode}, trying to restart...");
+                StartCoreProcess();
+                if (_coreProcess == null || _coreProcess.HasExited)
+                {
+                    Debug.WriteLine("Failed to restart Core process");
+                    return;
+                }
             }
 
             try
@@ -634,6 +680,8 @@ namespace MyGui
 
                 // Сериализуем сообщение в JSON
                 var json = JsonConvert.SerializeObject(message);
+                
+                Debug.WriteLine($"Sending to Core: {messageType} (ID: {message.MessageId})");
 
                 // Отправляем сообщение в Core
                 _coreProcess.StandardInput.WriteLine(json);
@@ -642,6 +690,7 @@ namespace MyGui
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error sending message to Core: {ex.Message}");
+                Debug.WriteLine($"Stack trace: {ex.StackTrace}");
             }
         }
 
