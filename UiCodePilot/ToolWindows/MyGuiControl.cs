@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Pipes;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Controls;
 using UiCodePilot.UI;
@@ -282,6 +284,187 @@ namespace MyGui
             }
         }
 
+    /// <summary>
+    /// Класс для обмена сообщениями с Core
+    /// </summary>
+    public class CoreMessenger
+    {
+        private NamedPipeClientStream _pipeClient;
+        private StreamWriter _pipeWriter;
+        private StreamReader _pipeReader;
+        private Thread _readThread;
+        private bool _isConnected;
+        private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
+
+        /// <summary>
+        /// Конструктор
+        /// </summary>
+        public CoreMessenger()
+        {
+            ConnectToCore();
+        }
+
+        /// <summary>
+        /// Подключение к Core через именованный канал
+        /// </summary>
+        private void ConnectToCore()
+        {
+            try
+            {
+                // Имя канала для подключения к Core
+                string pipeName = "ContinueCore";
+
+                // Создаем клиент именованного канала
+                _pipeClient = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                
+                // Пытаемся подключиться с таймаутом
+                _pipeClient.Connect(5000);
+                
+                // Создаем потоки для чтения и записи
+                _pipeWriter = new StreamWriter(_pipeClient) { AutoFlush = true };
+                _pipeReader = new StreamReader(_pipeClient);
+                
+                // Запускаем поток для чтения ответов
+                _readThread = new Thread(ReadPipeMessages);
+                _readThread.IsBackground = true;
+                _readThread.Start();
+                
+                _isConnected = true;
+                
+                Debug.WriteLine("Connected to Core via named pipe");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error connecting to Core: {ex.Message}");
+                _isConnected = false;
+            }
+        }
+
+        /// <summary>
+        /// Чтение сообщений из канала
+        /// </summary>
+        private void ReadPipeMessages()
+        {
+            try
+            {
+                while (_isConnected && _pipeClient.IsConnected)
+                {
+                    string line = _pipeReader.ReadLine();
+                    if (string.IsNullOrEmpty(line))
+                        continue;
+
+                    // Обрабатываем полученное сообщение
+                    ProcessReceivedMessage(line);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error reading from pipe: {ex.Message}");
+                _isConnected = false;
+            }
+        }
+
+        /// <summary>
+        /// Обработка полученного сообщения
+        /// </summary>
+        /// <param name="json">JSON-строка с сообщением</param>
+        private void ProcessReceivedMessage(string json)
+        {
+            try
+            {
+                // Парсим JSON
+                var message = JsonConvert.DeserializeObject<Message>(json);
+                if (message == null)
+                    return;
+
+                // Если есть ожидающий запрос, завершаем его
+                if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
+                {
+                    tcs.SetResult(message.Data);
+                    _pendingRequests.Remove(message.MessageId);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error processing message: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Отправка сообщения в Core
+        /// </summary>
+        /// <param name="messageType">Тип сообщения</param>
+        /// <param name="data">Данные сообщения</param>
+        /// <param name="messageId">Идентификатор сообщения</param>
+        public void SendToCore(string messageType, object data, string messageId = null)
+        {
+            if (!_isConnected || !_pipeClient.IsConnected)
+            {
+                Debug.WriteLine("Not connected to Core");
+                return;
+            }
+
+            try
+            {
+                // Создаем сообщение
+                var message = new Message
+                {
+                    MessageId = messageId ?? Guid.NewGuid().ToString(),
+                    MessageType = messageType,
+                    Data = data
+                };
+
+                // Сериализуем сообщение в JSON
+                var json = JsonConvert.SerializeObject(message);
+
+                // Отправляем сообщение в Core
+                _pipeWriter.WriteLine(json);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error sending message to Core: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Отправка запроса в Core и ожидание ответа
+        /// </summary>
+        /// <param name="messageType">Тип сообщения</param>
+        /// <param name="data">Данные сообщения</param>
+        /// <returns>Ответ от Core</returns>
+        public async Task<object> RequestFromCore(string messageType, object data)
+        {
+            if (!_isConnected)
+            {
+                // Пробуем переподключиться
+                ConnectToCore();
+                
+                if (!_isConnected)
+                {
+                    throw new InvalidOperationException("Not connected to Core");
+                }
+            }
+            
+            var messageId = Guid.NewGuid().ToString();
+            var tcs = new TaskCompletionSource<object>();
+            _pendingRequests[messageId] = tcs;
+
+            SendToCore(messageType, data, messageId);
+
+            // Ожидаем ответ с таймаутом
+            var timeoutTask = Task.Delay(10000);
+            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
+
+            if (completedTask == timeoutTask)
+            {
+                _pendingRequests.Remove(messageId);
+                throw new TimeoutException($"Request to Core timed out: {messageType}");
+            }
+
+            return await tcs.Task;
+        }
+        }
+
         /// <summary>
         /// Обработка запроса открытия профиля
         /// </summary>
@@ -500,152 +683,5 @@ namespace MyGui
         /// </summary>
         [JsonProperty("data")]
         public object Data { get; set; }
-    }
-
-    /// <summary>
-    /// Класс для обмена сообщениями с Core
-    /// </summary>
-    public class CoreMessenger
-    {
-        private Process _coreProcess;
-        private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
-
-        /// <summary>
-        /// Конструктор
-        /// </summary>
-        public CoreMessenger()
-        {
-            StartCoreProcess();
-        }
-
-        /// <summary>
-        /// Запуск процесса Core
-        /// </summary>
-        private void StartCoreProcess()
-        {
-            try
-            {
-                // Путь к исполняемому файлу Core
-                string corePath = System.IO.Path.Combine(
-                    System.IO.Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location),
-                    "core",
-                    "core.exe");
-
-                // Создаем процесс
-                _coreProcess = new Process();
-                _coreProcess.StartInfo.FileName = corePath;
-                _coreProcess.StartInfo.UseShellExecute = false;
-                _coreProcess.StartInfo.RedirectStandardInput = true;
-                _coreProcess.StartInfo.RedirectStandardOutput = true;
-                _coreProcess.StartInfo.CreateNoWindow = true;
-
-                // Обработчик вывода
-                _coreProcess.OutputDataReceived += OnCoreOutputDataReceived;
-
-                // Запускаем процесс
-                _coreProcess.Start();
-                _coreProcess.BeginOutputReadLine();
-
-                Debug.WriteLine("Core process started");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error starting Core process: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Обработчик вывода Core
-        /// </summary>
-        /// <param name="sender">Отправитель</param>
-        /// <param name="e">Аргументы события</param>
-        private void OnCoreOutputDataReceived(object sender, DataReceivedEventArgs e)
-        {
-            if (string.IsNullOrEmpty(e.Data))
-                return;
-
-            try
-            {
-                // Парсим JSON
-                var message = JsonConvert.DeserializeObject<Message>(e.Data);
-                if (message == null)
-                    return;
-
-                // Если есть ожидающий запрос, завершаем его
-                if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
-                {
-                    tcs.SetResult(message.Data);
-                    _pendingRequests.Remove(message.MessageId);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error handling Core output: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Отправка сообщения в Core
-        /// </summary>
-        /// <param name="messageType">Тип сообщения</param>
-        /// <param name="data">Данные сообщения</param>
-        /// <param name="messageId">Идентификатор сообщения</param>
-        public void SendToCore(string messageType, object data, string messageId = null)
-        {
-            if (_coreProcess == null || _coreProcess.HasExited)
-            {
-                Debug.WriteLine("Core process is not running");
-                return;
-            }
-
-            try
-            {
-                // Создаем сообщение
-                var message = new Message
-                {
-                    MessageId = messageId ?? Guid.NewGuid().ToString(),
-                    MessageType = messageType,
-                    Data = data
-                };
-
-                // Сериализуем сообщение в JSON
-                var json = JsonConvert.SerializeObject(message);
-
-                // Отправляем сообщение в Core
-                _coreProcess.StandardInput.WriteLine(json);
-                _coreProcess.StandardInput.Flush();
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error sending message to Core: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Отправка запроса в Core и ожидание ответа
-        /// </summary>
-        /// <param name="messageType">Тип сообщения</param>
-        /// <param name="data">Данные сообщения</param>
-        /// <returns>Ответ от Core</returns>
-        public async Task<object> RequestFromCore(string messageType, object data)
-        {
-            var messageId = Guid.NewGuid().ToString();
-            var tcs = new TaskCompletionSource<object>();
-            _pendingRequests[messageId] = tcs;
-
-            SendToCore(messageType, data, messageId);
-
-            // Ожидаем ответ с таймаутом
-            var timeoutTask = Task.Delay(10000);
-            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
-
-            if (completedTask == timeoutTask)
-            {
-                _pendingRequests.Remove(messageId);
-                throw new TimeoutException($"Request to Core timed out: {messageType}");
-            }
-
-            return await tcs.Task;
-        }
     }
 }
