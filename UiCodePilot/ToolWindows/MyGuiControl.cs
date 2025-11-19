@@ -5,10 +5,7 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.IO;
-using System.Net.Sockets;
 using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Controls;
 using UiCodePilot.UI;
 using EnvDTE;
@@ -18,7 +15,7 @@ namespace MyGui
     /// <summary>
     /// GUI контрол с WebView2 для отображения веб-интерфейса
     /// </summary>
-    public class MyGuiControl : UserControl
+    public partial class MyGuiControl : UserControl
     {
         private WebView2 _webView;
         private WebView _webViewHandler;
@@ -143,6 +140,7 @@ namespace MyGui
         /// <param name="message">Сообщение</param>
         private void HandleMessage(Message message)
         {
+            Debug.WriteLine($"HandleMessage {message.MessageType}");
             // Здесь можно добавить обработку различных типов сообщений
             switch (message.MessageType)
             {
@@ -284,193 +282,6 @@ namespace MyGui
             }
         }
 
-    /// <summary>
-    /// Класс для обмена сообщениями с Core
-    /// </summary>
-    public class CoreMessenger
-    {
-        private TcpClient _tcpClient;
-        private StreamWriter _tcpWriter;
-        private StreamReader _tcpReader;
-        private Thread _readThread;
-        private bool _isConnected;
-        private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
-
-        /// <summary>
-        /// Конструктор
-        /// </summary>
-        public CoreMessenger()
-        {
-            ConnectToCore();
-        }
-
-        /// <summary>
-        /// Подключение к Core через TCP
-        /// </summary>
-        private void ConnectToCore()
-        {
-            try
-            {
-                // Адрес и порт для подключения к Core
-                string host = "127.0.0.1";
-                int port = 3000;
-
-                // Создаем TCP-клиент
-                _tcpClient = new TcpClient();
-                
-                // Пытаемся подключиться с таймаутом
-                var connectTask = _tcpClient.ConnectAsync(host, port);
-                if (!Task.WaitAll(new Task[] { connectTask }, 5000))
-                {
-                    throw new TimeoutException($"Connection to {host}:{port} timed out");
-                }
-                
-                // Создаем потоки для чтения и записи
-                NetworkStream stream = _tcpClient.GetStream();
-                _tcpWriter = new StreamWriter(stream) { AutoFlush = true };
-                _tcpReader = new StreamReader(stream);
-                
-                // Запускаем поток для чтения ответов
-                _readThread = new Thread(ReadTcpMessages);
-                _readThread.IsBackground = true;
-                _readThread.Start();
-                
-                _isConnected = true;
-                
-                Debug.WriteLine($"Connected to Core via TCP at {host}:{port}");
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error connecting to Core: {ex.Message}");
-                _isConnected = false;
-            }
-        }
-
-        /// <summary>
-        /// Чтение сообщений из TCP-соединения
-        /// </summary>
-        private void ReadTcpMessages()
-        {
-            try
-            {
-                while (_isConnected && _tcpClient.Connected)
-                {
-                    string line = _tcpReader.ReadLine();
-                    if (string.IsNullOrEmpty(line))
-                        continue;
-
-                    // Обрабатываем полученное сообщение
-                    ProcessReceivedMessage(line);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error reading from TCP: {ex.Message}");
-                _isConnected = false;
-            }
-        }
-
-        /// <summary>
-        /// Обработка полученного сообщения
-        /// </summary>
-        /// <param name="json">JSON-строка с сообщением</param>
-        private void ProcessReceivedMessage(string json)
-        {
-            try
-            {
-                // Парсим JSON
-                var message = JsonConvert.DeserializeObject<Message>(json);
-                if (message == null)
-                    return;
-
-                // Если есть ожидающий запрос, завершаем его
-                if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
-                {
-                    tcs.SetResult(message.Data);
-                    _pendingRequests.Remove(message.MessageId);
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error processing message: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Отправка сообщения в Core
-        /// </summary>
-        /// <param name="messageType">Тип сообщения</param>
-        /// <param name="data">Данные сообщения</param>
-        /// <param name="messageId">Идентификатор сообщения</param>
-        public void SendToCore(string messageType, object data, string messageId = null)
-        {
-            if (!_isConnected || !_tcpClient.Connected)
-            {
-                Debug.WriteLine("Not connected to Core");
-                return;
-            }
-
-            try
-            {
-                // Создаем сообщение
-                var message = new Message
-                {
-                    MessageId = messageId ?? Guid.NewGuid().ToString(),
-                    MessageType = messageType,
-                    Data = data
-                };
-
-                // Сериализуем сообщение в JSON
-                var json = JsonConvert.SerializeObject(message);
-
-                // Отправляем сообщение в Core
-                _tcpWriter.WriteLine(json);
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error sending message to Core: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Отправка запроса в Core и ожидание ответа
-        /// </summary>
-        /// <param name="messageType">Тип сообщения</param>
-        /// <param name="data">Данные сообщения</param>
-        /// <returns>Ответ от Core</returns>
-        public async Task<object> RequestFromCore(string messageType, object data)
-        {
-            if (!_isConnected)
-            {
-                // Пробуем переподключиться
-                ConnectToCore();
-                
-                if (!_isConnected)
-                {
-                    throw new InvalidOperationException("Not connected to Core");
-                }
-            }
-            
-            var messageId = Guid.NewGuid().ToString();
-            var tcs = new TaskCompletionSource<object>();
-            _pendingRequests[messageId] = tcs;
-
-            SendToCore(messageType, data, messageId);
-
-            // Ожидаем ответ с таймаутом
-            var timeoutTask = Task.Delay(10000);
-            var completedTask = await Task.WhenAny(tcs.Task, timeoutTask);
-
-            if (completedTask == timeoutTask)
-            {
-                _pendingRequests.Remove(messageId);
-                throw new TimeoutException($"Request to Core timed out: {messageType}");
-            }
-
-            return await tcs.Task;
-        }
-        }
-
         /// <summary>
         /// Обработка запроса открытия профиля
         /// </summary>
@@ -481,8 +292,11 @@ namespace MyGui
             {
                 if (_coreMessenger != null)
                 {
+                    Debug.WriteLine($"HandleOpenProfile start");
                     // Получаем результат открытия профиля из Core
                     var result = await _coreMessenger.RequestFromCore("config/openProfile", message.Data);
+
+                    Debug.WriteLine($"HandleOpenProfile {result}");
                     
                     // Отправляем ответ
                     SendToWebview(message.MessageType, result, message.MessageId);
