@@ -1,18 +1,17 @@
 ﻿using Newtonsoft.Json;
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Net.Sockets;
 using System.Threading.Tasks;
 
-namespace MyGui
+namespace UiCodePilot.ToolWindows
 {
-public partial class MyGuiControl
-    {
-        /// <summary>
-        /// Класс для обмена сообщениями с Core
-        /// </summary>
-        public class CoreMessenger
+    /// <summary>
+    /// Класс для обмена сообщениями с Core
+    /// </summary>
+    public class CoreMessenger
     {
         private TcpClient _tcpClient;
         private StreamWriter _tcpWriter;
@@ -20,13 +19,46 @@ public partial class MyGuiControl
         private System.Threading.Thread _readThread;
         private bool _isConnected;
         private Dictionary<string, TaskCompletionSource<object>> _pendingRequests = new Dictionary<string, TaskCompletionSource<object>>();
+        private Dictionary<string, Action<Message>> _messageTypeHandlers = new Dictionary<string, Action<Message>>();
+        private object _configCache;
+
+        /// <summary>
+        /// Событие, возникающее при получении сообщения от Core
+        /// </summary>
+        public event EventHandler<Message> MessageReceived;
 
         /// <summary>
         /// Конструктор
         /// </summary>
         public CoreMessenger()
         {
+            // Регистрируем обработчики сообщений
+            RegisterMessageHandlers();
+            
+            // Подключаемся к Core
             ConnectToCore();
+        }
+
+        /// <summary>
+        /// Регистрация обработчиков сообщений
+        /// </summary>
+        private void RegisterMessageHandlers()
+        {
+            // Обработчик для ping-сообщений
+            _messageTypeHandlers["ping"] = (message) => {
+                SendToCore("pong", null, message.MessageId);
+            };
+
+            // Обработчик для сообщений о конфигурации
+            _messageTypeHandlers["configUpdate"] = (message) => {
+                _configCache = message.Data;
+                Debug.WriteLine("Received config update");
+            };
+
+            // Обработчик для сообщений о профилях
+            _messageTypeHandlers["didChangeAvailableProfiles"] = (message) => {
+                Debug.WriteLine("Profiles changed");
+            };
         }
 
         /// <summary>
@@ -63,12 +95,45 @@ public partial class MyGuiControl
                 _isConnected = true;
                 
                 Debug.WriteLine($"Connected to Core via TCP at {host}:{port}");
+
+                // Запрашиваем конфигурацию после подключения
+                RequestConfig();
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error connecting to Core: {ex.Message}");
                 _isConnected = false;
             }
+        }
+
+        /// <summary>
+        /// Запрос конфигурации от Core
+        /// </summary>
+        private async void RequestConfig()
+        {
+            try
+            {
+                // Запрашиваем список профилей
+                var profiles = await RequestFromCore("config/listProfiles", null);
+                Debug.WriteLine($"Received profiles: {JsonConvert.SerializeObject(profiles)}");
+
+                // Запрашиваем текущую конфигурацию
+                _configCache = await RequestFromCore("config/getSerializedProfileInfo", new { profileId = "default" });
+                Debug.WriteLine($"Received config: {JsonConvert.SerializeObject(_configCache)}");
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error requesting config: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Получение кэшированной конфигурации
+        /// </summary>
+        /// <returns>Конфигурация</returns>
+        public object GetConfig()
+        {
+            return _configCache;
         }
 
         /// <summary>
@@ -92,6 +157,12 @@ public partial class MyGuiControl
             {
                 Debug.WriteLine($"Error reading from TCP: {ex.Message}");
                 _isConnected = false;
+                
+                // Пробуем переподключиться
+                Task.Run(() => {
+                    System.Threading.Thread.Sleep(5000); // Ждем 5 секунд перед повторным подключением
+                    ConnectToCore();
+                });
             }
         }
 
@@ -108,11 +179,24 @@ public partial class MyGuiControl
                 if (message == null)
                     return;
 
+                Debug.WriteLine($"Received message: {message.MessageType}, ID: {message.MessageId}");
+
                 // Если есть ожидающий запрос, завершаем его
                 if (_pendingRequests.TryGetValue(message.MessageId, out var tcs))
                 {
                     tcs.SetResult(message.Data);
                     _pendingRequests.Remove(message.MessageId);
+                }
+                else
+                {
+                    // Если есть обработчик для данного типа сообщения, вызываем его
+                    if (_messageTypeHandlers.TryGetValue(message.MessageType, out var handler))
+                    {
+                        handler(message);
+                    }
+
+                    // Вызываем событие получения сообщения
+                    MessageReceived?.Invoke(this, message);
                 }
             }
             catch (Exception ex)
@@ -129,11 +213,18 @@ public partial class MyGuiControl
         /// <param name="messageId">Идентификатор сообщения</param>
         public void SendToCore(string messageType, object data, string messageId = null)
         {
-                Debug.WriteLine($"RequestFromCore 7");
-                if (!_isConnected || !_tcpClient.Connected)
+            if (!_isConnected || !_tcpClient.Connected)
             {
                 Debug.WriteLine("Not connected to Core");
-                return;
+                
+                // Пробуем переподключиться
+                ConnectToCore();
+                
+                if (!_isConnected || !_tcpClient.Connected)
+                {
+                    Debug.WriteLine("Failed to reconnect to Core");
+                    return;
+                }
             }
 
             try
@@ -149,15 +240,23 @@ public partial class MyGuiControl
                 // Сериализуем сообщение в JSON
                 var json = JsonConvert.SerializeObject(message);
 
-                    Debug.WriteLine($"RequestFromCore 8");
-
-                    // Отправляем сообщение в Core
-                    _tcpWriter.WriteLine(json);
-                    Debug.WriteLine($"RequestFromCore 9");
-                }
+                // Отправляем сообщение в Core
+                _tcpWriter.WriteLine(json);
+                
+                Debug.WriteLine($"Sent message to Core: {messageType}, ID: {message.MessageId}");
+            }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error sending message to Core: {ex.Message}");
+                
+                // Помечаем соединение как разорванное
+                _isConnected = false;
+                
+                // Пробуем переподключиться
+                Task.Run(() => {
+                    System.Threading.Thread.Sleep(5000); // Ждем 5 секунд перед повторным подключением
+                    ConnectToCore();
+                });
             }
         }
 
@@ -169,27 +268,21 @@ public partial class MyGuiControl
         /// <returns>Ответ от Core</returns>
         public async Task<object> RequestFromCore(string messageType, object data)
         {
-                Debug.WriteLine($"RequestFromCore 1");
-                if (!_isConnected)
+            if (!_isConnected)
             {
-                    Debug.WriteLine($"RequestFromCore 2");
-                    // Пробуем переподключиться
-                    ConnectToCore();
+                // Пробуем переподключиться
+                ConnectToCore();
                 if (!_isConnected)
                 {
-                        Debug.WriteLine($"RequestFromCore 3");
-                        throw new InvalidOperationException("Not connected to Core");
+                    throw new InvalidOperationException("Not connected to Core");
                 }
             }
 
-                Debug.WriteLine($"RequestFromCore 4");
-                var messageId = Guid.NewGuid().ToString();
-                Debug.WriteLine($"RequestFromCore 5");
-                var tcs = new TaskCompletionSource<object>();
+            var messageId = Guid.NewGuid().ToString();
+            var tcs = new TaskCompletionSource<object>();
             _pendingRequests[messageId] = tcs;
-                Debug.WriteLine($"RequestFromCore 6");
 
-                SendToCore(messageType, data, messageId);
+            SendToCore(messageType, data, messageId);
 
             // Ожидаем ответ с таймаутом
             var timeoutTask = Task.Delay(10000);
@@ -203,6 +296,29 @@ public partial class MyGuiControl
 
             return await tcs.Task;
         }
-        }
+    }
+
+    /// <summary>
+    /// Класс сообщения
+    /// </summary>
+    public class Message
+    {
+        /// <summary>
+        /// Идентификатор сообщения
+        /// </summary>
+        [JsonProperty("messageId")]
+        public string MessageId { get; set; }
+
+        /// <summary>
+        /// Тип сообщения
+        /// </summary>
+        [JsonProperty("messageType")]
+        public string MessageType { get; set; }
+
+        /// <summary>
+        /// Данные сообщения
+        /// </summary>
+        [JsonProperty("data")]
+        public object Data { get; set; }
     }
 }

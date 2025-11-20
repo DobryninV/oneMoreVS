@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.Threading;
 using System.Windows.Controls;
 using UiCodePilot.UI;
+using UiCodePilot.ToolWindows;
 using EnvDTE;
 
 namespace MyGui
@@ -38,12 +39,25 @@ namespace MyGui
             {
                 // Создаем экземпляр CoreMessenger для обмена сообщениями с Core
                 _coreMessenger = new CoreMessenger();
+                
+                // Подписываемся на событие получения сообщения
+                _coreMessenger.MessageReceived += OnCoreMessageReceived;
+                
                 Debug.WriteLine("Core initialized");
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"Error initializing Core: {ex.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Обработчик события получения сообщения от Core
+        /// </summary>
+        private void OnCoreMessageReceived(object sender, Message message)
+        {
+            // Отправляем сообщение в WebView
+            SendToWebview(message.MessageType, message.Data, message.MessageId);
         }
 
 
@@ -481,27 +495,4 @@ namespace MyGui
         }
     }
 
-    /// <summary>
-    /// Класс сообщения
-    /// </summary>
-    public class Message
-    {
-        /// <summary>
-        /// Идентификатор сообщения
-        /// </summary>
-        [JsonProperty("messageId")]
-        public string MessageId { get; set; }
-
-        /// <summary>
-        /// Тип сообщения
-        /// </summary>
-        [JsonProperty("messageType")]
-        public string MessageType { get; set; }
-
-        /// <summary>
-        /// Данные сообщения
-        /// </summary>
-        [JsonProperty("data")]
-        public object Data { get; set; }
-    }
 }
